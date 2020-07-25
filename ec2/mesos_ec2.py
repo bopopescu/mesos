@@ -20,13 +20,13 @@ from boto.ec2.blockdevicemapping import BlockDeviceMapping, EBSBlockDeviceType
 # Configure and parse our command-line arguments
 def parse_args():
   parser = OptionParser(usage="mesos-ec2 [options] <action> <cluster_name>"
-      + "\n\n<action> can be: launch, destroy, login, stop, start, get-master",
+      + "\n\n<action> can be: launch, destroy, login, stop, start, get-main",
       add_help_option=False)
   parser.add_option("-h", "--help", action="help",
                     help="Show this help message and exit")
-  parser.add_option("-s", "--slaves", type="int", default=1,
-      help="Number of slaves to launch (default: 1)")
-  parser.add_option("-n", "--slavesperslave", type="int", default=1)
+  parser.add_option("-s", "--subordinates", type="int", default=1,
+      help="Number of subordinates to launch (default: 1)")
+  parser.add_option("-n", "--subordinatespersubordinate", type="int", default=1)
   parser.add_option("-w", "--wait", type="int", default=60,
       help="Number of seconds to wait for cluster nodes to start (default: 60)")
   parser.add_option("-k", "--key-pair",
@@ -36,8 +36,8 @@ def parse_args():
   parser.add_option("-t", "--instance-type", default="m1.large",
       help="Type of instance to launch (default: m1.large). " +
            "WARNING: must be 64 bit, thus small instances won't work")
-  parser.add_option("-m", "--master-instance-type", default="",
-      help="Master instance type (leave empty for same as instance-type)")
+  parser.add_option("-m", "--main-instance-type", default="",
+      help="Main instance type (leave empty for same as instance-type)")
   parser.add_option("-z", "--zone", default="us-east-1b",
       help="Availability zone to launch instances in")
   parser.add_option("-a", "--ami", default="ami-4517dc2c",
@@ -47,8 +47,8 @@ def parse_args():
   parser.add_option("-d", "--download", metavar="SOURCE", default="none",
       help="Where to download latest code from: set to 'git' to check out " +
            "from git, or 'none' to use the Mesos on the AMI (default)")
-  parser.add_option("-b", "--branch", default="master",
-      help="If using git, which branch to check out. Default is 'master'")
+  parser.add_option("-b", "--branch", default="main",
+      help="If using git, which branch to check out. Default is 'main'")
   parser.add_option("-D", metavar="[ADDRESS:]PORT", dest="proxy_port", 
       help="Use SSH dynamic port forwarding to create a SOCKS proxy at " +
             "the given local address (for use with login)")
@@ -56,7 +56,7 @@ def parse_args():
       help="Resume installation on a previously launched cluster " +
            "(for debugging)")
   parser.add_option("-f", "--ft", metavar="NUM_MASTERS", default="1", 
-      help="Number of masters to run. Default is 1. Greater values " + 
+      help="Number of mains to run. Default is 1. Greater values " + 
            "make Mesos run in fault-tolerant mode with ZooKeeper.")
   parser.add_option("--ebs-vol-size", metavar="SIZE", type="int", default=0,
       help="Attach a new EBS volume of size SIZE (in GB) to each node as " +
@@ -65,7 +65,7 @@ def parse_args():
   parser.add_option("--swap", metavar="SWAP", type="int", default=1024,
       help="Swap space to set up per node, in MB (default: 1024)")
   parser.add_option("--spot-price", metavar="PRICE", type="float",
-      help="If specified, launch slaves as spot instances with the given " +
+      help="If specified, launch subordinates as spot instances with the given " +
             "maximum price (in dollars)")
   (opts, args) = parser.parse_args()
   opts.ft = int(opts.ft)
@@ -120,37 +120,37 @@ def is_active(instance):
 
 # Launch a cluster of the given name, by setting up its security groups,
 # and then starting new instances in them.
-# Returns a tuple of EC2 reservation objects for the master, slave
+# Returns a tuple of EC2 reservation objects for the main, subordinate
 # and zookeeper instances (in that order).
 # Fails if there already instances running in the cluster's groups.
 def launch_cluster(conn, opts, cluster_name):
   print "Setting up security groups..."
-  master_group = get_or_make_group(conn, cluster_name + "-master")
-  slave_group = get_or_make_group(conn, cluster_name + "-slaves")
+  main_group = get_or_make_group(conn, cluster_name + "-main")
+  subordinate_group = get_or_make_group(conn, cluster_name + "-subordinates")
   zoo_group = get_or_make_group(conn, cluster_name + "-zoo")
-  if master_group.rules == []: # Group was just now created
-    master_group.authorize(src_group=master_group)
-    master_group.authorize(src_group=slave_group)
-    master_group.authorize(src_group=zoo_group)
-    master_group.authorize('tcp', 22, 22, '0.0.0.0/0')
-    master_group.authorize('tcp', 8080, 8081, '0.0.0.0/0')
-    master_group.authorize('tcp', 50030, 50030, '0.0.0.0/0')
-    master_group.authorize('tcp', 50070, 50070, '0.0.0.0/0')
-    master_group.authorize('tcp', 60070, 60070, '0.0.0.0/0')
-    master_group.authorize('tcp', 38090, 38090, '0.0.0.0/0')
-  if slave_group.rules == []: # Group was just now created
-    slave_group.authorize(src_group=master_group)
-    slave_group.authorize(src_group=slave_group)
-    slave_group.authorize(src_group=zoo_group)
-    slave_group.authorize('tcp', 22, 22, '0.0.0.0/0')
-    slave_group.authorize('tcp', 8080, 8081, '0.0.0.0/0')
-    slave_group.authorize('tcp', 50060, 50060, '0.0.0.0/0')
-    slave_group.authorize('tcp', 50075, 50075, '0.0.0.0/0')
-    slave_group.authorize('tcp', 60060, 60060, '0.0.0.0/0')
-    slave_group.authorize('tcp', 60075, 60075, '0.0.0.0/0')
+  if main_group.rules == []: # Group was just now created
+    main_group.authorize(src_group=main_group)
+    main_group.authorize(src_group=subordinate_group)
+    main_group.authorize(src_group=zoo_group)
+    main_group.authorize('tcp', 22, 22, '0.0.0.0/0')
+    main_group.authorize('tcp', 8080, 8081, '0.0.0.0/0')
+    main_group.authorize('tcp', 50030, 50030, '0.0.0.0/0')
+    main_group.authorize('tcp', 50070, 50070, '0.0.0.0/0')
+    main_group.authorize('tcp', 60070, 60070, '0.0.0.0/0')
+    main_group.authorize('tcp', 38090, 38090, '0.0.0.0/0')
+  if subordinate_group.rules == []: # Group was just now created
+    subordinate_group.authorize(src_group=main_group)
+    subordinate_group.authorize(src_group=subordinate_group)
+    subordinate_group.authorize(src_group=zoo_group)
+    subordinate_group.authorize('tcp', 22, 22, '0.0.0.0/0')
+    subordinate_group.authorize('tcp', 8080, 8081, '0.0.0.0/0')
+    subordinate_group.authorize('tcp', 50060, 50060, '0.0.0.0/0')
+    subordinate_group.authorize('tcp', 50075, 50075, '0.0.0.0/0')
+    subordinate_group.authorize('tcp', 60060, 60060, '0.0.0.0/0')
+    subordinate_group.authorize('tcp', 60075, 60075, '0.0.0.0/0')
   if zoo_group.rules == []: # Group was just now created
-    zoo_group.authorize(src_group=master_group)
-    zoo_group.authorize(src_group=slave_group)
+    zoo_group.authorize(src_group=main_group)
+    zoo_group.authorize(src_group=subordinate_group)
     zoo_group.authorize(src_group=zoo_group)
     zoo_group.authorize('tcp', 22, 22, '0.0.0.0/0')
     zoo_group.authorize('tcp', 2181, 2181, '0.0.0.0/0')
@@ -162,11 +162,11 @@ def launch_cluster(conn, opts, cluster_name):
   reservations = conn.get_all_instances()
   for res in reservations:
     group_names = [g.id for g in res.groups]
-    if master_group.name in group_names or slave_group.name in group_names or zoo_group.name in group_names:
+    if main_group.name in group_names or subordinate_group.name in group_names or zoo_group.name in group_names:
       active = [i for i in res.instances if is_active(i)]
       if len(active) > 0:
         print >> stderr, ("ERROR: There are already instances running in " +
-            "group %s, %s or %s" % (master_group.name, slave_group.name, zoo_group.name))
+            "group %s, %s or %s" % (main_group.name, subordinate_group.name, zoo_group.name))
         sys.exit(1)
   print "Launching instances..."
   try:
@@ -183,22 +183,22 @@ def launch_cluster(conn, opts, cluster_name):
     device.delete_on_termination = True
     block_map["/dev/sdv"] = device
 
-  # Launch slaves
+  # Launch subordinates
   if opts.spot_price != None:
     # Launch spot instances with the requested price
-    print ("Requesting %d slaves as spot instances with price $%.3f" %
-           (opts.slaves, opts.spot_price))
-    slave_reqs = conn.request_spot_instances(
+    print ("Requesting %d subordinates as spot instances with price $%.3f" %
+           (opts.subordinates, opts.spot_price))
+    subordinate_reqs = conn.request_spot_instances(
         price = opts.spot_price,
         image_id = opts.ami,
         launch_group = "launch-group-%s" % cluster_name,
         placement = opts.zone,
-        count = opts.slaves,
+        count = opts.subordinates,
         key_name = opts.key_pair,
-        security_groups = [slave_group],
+        security_groups = [subordinate_group],
         instance_type = opts.instance_type,
         block_device_map = block_map)
-    my_req_ids = [req.id for req in slave_reqs]
+    my_req_ids = [req.id for req in subordinate_reqs]
     print "Waiting for spot instances to be granted..."
     while True:
       time.sleep(10)
@@ -212,40 +212,40 @@ def launch_cluster(conn, opts, cluster_name):
         if id_to_req[i].state == "active":
           active += 1
           instance_ids.append(id_to_req[i].instance_id)
-      if active == opts.slaves:
-        print "All %d slaves granted" % opts.slaves
+      if active == opts.subordinates:
+        print "All %d subordinates granted" % opts.subordinates
         reservations = conn.get_all_instances(instance_ids)
-        slave_nodes = []
+        subordinate_nodes = []
         for r in reservations:
-          slave_nodes += r.instances
+          subordinate_nodes += r.instances
         break
       else:
-        print "%d of %d slaves granted, waiting longer" % (active, opts.slaves)
+        print "%d of %d subordinates granted, waiting longer" % (active, opts.subordinates)
   else:
     # Launch non-spot instances
-    slave_res = image.run(key_name = opts.key_pair,
-                          security_groups = [slave_group],
+    subordinate_res = image.run(key_name = opts.key_pair,
+                          security_groups = [subordinate_group],
                           instance_type = opts.instance_type,
                           placement = opts.zone,
-                          min_count = opts.slaves,
-                          max_count = opts.slaves,
+                          min_count = opts.subordinates,
+                          max_count = opts.subordinates,
                           block_device_map = block_map)
-    slave_nodes = slave_res.instances
-    print "Launched slaves, regid = " + slave_res.id
+    subordinate_nodes = subordinate_res.instances
+    print "Launched subordinates, regid = " + subordinate_res.id
 
-  # Launch masters
-  master_type = opts.master_instance_type
-  if master_type == "":
-    master_type = opts.instance_type
-  master_res = image.run(key_name = opts.key_pair,
-                         security_groups = [master_group],
-                         instance_type = master_type,
+  # Launch mains
+  main_type = opts.main_instance_type
+  if main_type == "":
+    main_type = opts.instance_type
+  main_res = image.run(key_name = opts.key_pair,
+                         security_groups = [main_group],
+                         instance_type = main_type,
                          placement = opts.zone,
                          min_count = opts.ft,
                          max_count = opts.ft,
                          block_device_map = block_map)
-  master_nodes = master_res.instances
-  print "Launched master, regid = " + master_res.id
+  main_nodes = main_res.instances
+  print "Launched main, regid = " + main_res.id
 
   # Launch ZooKeeper nodes if required
   if opts.ft > 1:
@@ -262,37 +262,37 @@ def launch_cluster(conn, opts, cluster_name):
     zoo_nodes = []
 
   # Return all the instances
-  return (master_nodes, slave_nodes, zoo_nodes)
+  return (main_nodes, subordinate_nodes, zoo_nodes)
 
 
 # Get the EC2 instances in an existing cluster if available.
-# Returns a tuple of lists of EC2 instance objects for the masters,
-# slaves and zookeeper nodes (in that order).
+# Returns a tuple of lists of EC2 instance objects for the mains,
+# subordinates and zookeeper nodes (in that order).
 def get_existing_cluster(conn, opts, cluster_name):
   print "Searching for existing cluster " + cluster_name + "..."
   reservations = conn.get_all_instances()
-  master_nodes = []
-  slave_nodes = []
+  main_nodes = []
+  subordinate_nodes = []
   zoo_nodes = []
   for res in reservations:
     active = [i for i in res.instances if is_active(i)]
     if len(active) > 0:
       group_names = [g.id for g in res.groups]
-      if group_names == [cluster_name + "-master"]:
-        master_nodes += res.instances
-      elif group_names == [cluster_name + "-slaves"]:
-        slave_nodes += res.instances
+      if group_names == [cluster_name + "-main"]:
+        main_nodes += res.instances
+      elif group_names == [cluster_name + "-subordinates"]:
+        subordinate_nodes += res.instances
       elif group_names == [cluster_name + "-zoo"]:
         zoo_nodes += res.instances
-  if master_nodes != [] and slave_nodes != []:
-    print ("Found %d master(s), %d slaves, %d ZooKeeper nodes" %
-           (len(master_nodes), len(slave_nodes), len(zoo_nodes)))
-    return (master_nodes, slave_nodes, zoo_nodes)
+  if main_nodes != [] and subordinate_nodes != []:
+    print ("Found %d main(s), %d subordinates, %d ZooKeeper nodes" %
+           (len(main_nodes), len(subordinate_nodes), len(zoo_nodes)))
+    return (main_nodes, subordinate_nodes, zoo_nodes)
   else:
-    if master_nodes == [] and slave_nodes != []:
-      print "ERROR: Could not find master in group " + cluster_name + "-master"
-    elif master_nodes != [] and slave_nodes == []:
-      print "ERROR: Could not find slaves in group " + cluster_name + "-slaves"
+    if main_nodes == [] and subordinate_nodes != []:
+      print "ERROR: Could not find main in group " + cluster_name + "-main"
+    elif main_nodes != [] and subordinate_nodes == []:
+      print "ERROR: Could not find subordinates in group " + cluster_name + "-subordinates"
     else:
       print "ERROR: Could not find any existing cluster"
     sys.exit(1)
@@ -300,27 +300,27 @@ def get_existing_cluster(conn, opts, cluster_name):
 
 # Deploy configuration files and run setup scripts on a newly launched
 # or started EC2 cluster.
-def setup_cluster(conn, master_nodes, slave_nodes, zoo_nodes, opts, deploy_ssh_key):
-  print "Deploying files to master..."
-  deploy_files(conn, "deploy." + opts.os, opts, master_nodes, slave_nodes, zoo_nodes)
-  master = master_nodes[0].public_dns_name
+def setup_cluster(conn, main_nodes, subordinate_nodes, zoo_nodes, opts, deploy_ssh_key):
+  print "Deploying files to main..."
+  deploy_files(conn, "deploy." + opts.os, opts, main_nodes, subordinate_nodes, zoo_nodes)
+  main = main_nodes[0].public_dns_name
   if deploy_ssh_key:
-    print "Copying SSH key %s to master..." % opts.identity_file
-    ssh(master, opts, 'mkdir -p /root/.ssh')
-    scp(master, opts, opts.identity_file, '/root/.ssh/id_rsa')
-  print "Running setup on master..."
-  ssh(master, opts, "chmod u+x mesos-ec2/setup")
-  ssh(master, opts, "mesos-ec2/setup %s %s %s %s" %
+    print "Copying SSH key %s to main..." % opts.identity_file
+    ssh(main, opts, 'mkdir -p /root/.ssh')
+    scp(main, opts, opts.identity_file, '/root/.ssh/id_rsa')
+  print "Running setup on main..."
+  ssh(main, opts, "chmod u+x mesos-ec2/setup")
+  ssh(main, opts, "mesos-ec2/setup %s %s %s %s" %
       (opts.os, opts.download, opts.branch, opts.swap))
   print "Done!"
 
 
-# Wait for a whole cluster (masters, slaves and ZooKeeper) to start up
-def wait_for_cluster(conn, wait_secs, master_nodes, slave_nodes, zoo_nodes):
+# Wait for a whole cluster (mains, subordinates and ZooKeeper) to start up
+def wait_for_cluster(conn, wait_secs, main_nodes, subordinate_nodes, zoo_nodes):
   print "Waiting for instances to start up..."
   time.sleep(5)
-  wait_for_instances(conn, master_nodes)
-  wait_for_instances(conn, slave_nodes)
+  wait_for_instances(conn, main_nodes)
+  wait_for_instances(conn, subordinate_nodes)
   if zoo_nodes != []:
     wait_for_instances(conn, zoo_nodes)
   print "Waiting %d more seconds..." % wait_secs
@@ -354,11 +354,11 @@ def get_num_disks(instance_type):
 
 # Deploy the configuration file templates in a given local directory to
 # a cluster, filling in any template parameters with information about the
-# cluster (e.g. lists of masters and slaves). Files are only deployed to
-# the first master instance in the cluster, and we expect the setup
+# cluster (e.g. lists of mains and subordinates). Files are only deployed to
+# the first main instance in the cluster, and we expect the setup
 # script to be run on that instance to copy them to other nodes.
-def deploy_files(conn, root_dir, opts, master_nodes, slave_nodes, zoo_nodes):
-  active_master = master_nodes[0].public_dns_name
+def deploy_files(conn, root_dir, opts, main_nodes, subordinate_nodes, zoo_nodes):
+  active_main = main_nodes[0].public_dns_name
 
   num_disks = get_num_disks(opts.instance_type)
   hdfs_data_dirs = "/mnt/ephemeral-hdfs/data"
@@ -376,16 +376,16 @@ def deploy_files(conn, root_dir, opts, master_nodes, slave_nodes, zoo_nodes):
     zoo_list = "NONE"
     # TODO: temporary code to support older versions of Mesos with 1@ URLs
     if opts.os == "amazon64":
-      cluster_url = "master@%s:5050" % active_master
+      cluster_url = "main@%s:5050" % active_main
     else:
-      cluster_url = "1@%s:5050" % active_master
+      cluster_url = "1@%s:5050" % active_main
 
   template_vars = {
-    "master_list": '\n'.join([i.public_dns_name for i in master_nodes]),
-    "active_master": active_master,
-    "slave_list": '\n'.join([i.public_dns_name for i in slave_nodes]),
+    "main_list": '\n'.join([i.public_dns_name for i in main_nodes]),
+    "active_main": active_main,
+    "subordinate_list": '\n'.join([i.public_dns_name for i in subordinate_nodes]),
     "zoo_list": zoo_list,
-    "slaves_per_slave": str(opts.slavesperslave),
+    "subordinates_per_subordinate": str(opts.subordinatespersubordinate),
     "cluster_url": cluster_url,
     "hdfs_data_dirs": hdfs_data_dirs,
     "mapred_local_dirs": mapred_local_dirs
@@ -411,9 +411,9 @@ def deploy_files(conn, root_dir, opts, master_nodes, slave_nodes, zoo_nodes):
                 text = text.replace("{{" + key + "}}", template_vars[key])
               dest.write(text)
               dest.close()
-  # rsync the whole directory over to the master machine
+  # rsync the whole directory over to the main machine
   command = (("rsync -rv -e 'ssh -o StrictHostKeyChecking=no -i %s' " + 
-      "'%s/' 'root@%s:/'") % (opts.identity_file, tmp_dir, active_master))
+      "'%s/' 'root@%s:/'") % (opts.identity_file, tmp_dir, active_main))
   subprocess.check_call(command, shell=True)
   # Remove the temp directory we created above
   shutil.rmtree(tmp_dir)
@@ -443,26 +443,26 @@ def main():
 
   if action == "launch":
     if opts.resume:
-      (master_nodes, slave_nodes, zoo_nodes) = get_existing_cluster(
+      (main_nodes, subordinate_nodes, zoo_nodes) = get_existing_cluster(
           conn, opts, cluster_name)
     else:
-      (master_nodes, slave_nodes, zoo_nodes) = launch_cluster(
+      (main_nodes, subordinate_nodes, zoo_nodes) = launch_cluster(
           conn, opts, cluster_name)
-      wait_for_cluster(conn, opts.wait, master_nodes, slave_nodes, zoo_nodes)
-    setup_cluster(conn, master_nodes, slave_nodes, zoo_nodes, opts, True)
+      wait_for_cluster(conn, opts.wait, main_nodes, subordinate_nodes, zoo_nodes)
+    setup_cluster(conn, main_nodes, subordinate_nodes, zoo_nodes, opts, True)
 
   elif action == "destroy":
     response = raw_input("Are you sure you want to destroy the cluster " +
         cluster_name + "?\nALL DATA ON ALL NODES WILL BE LOST!!\n" +
         "Destroy cluster " + cluster_name + " (y/N): ")
     if response == "y":
-      (master_nodes, slave_nodes, zoo_nodes) = get_existing_cluster(
+      (main_nodes, subordinate_nodes, zoo_nodes) = get_existing_cluster(
           conn, opts, cluster_name)
-      print "Terminating master..."
-      for inst in master_nodes:
+      print "Terminating main..."
+      for inst in main_nodes:
         inst.terminate()
-      print "Terminating slaves..."
-      for inst in slave_nodes:
+      print "Terminating subordinates..."
+      for inst in subordinate_nodes:
         inst.terminate()
       if zoo_nodes != []:
         print "Terminating zoo..."
@@ -470,19 +470,19 @@ def main():
           inst.terminate()
 
   elif action == "login":
-    (master_nodes, slave_nodes, zoo_nodes) = get_existing_cluster(
+    (main_nodes, subordinate_nodes, zoo_nodes) = get_existing_cluster(
         conn, opts, cluster_name)
-    master = master_nodes[0].public_dns_name
-    print "Logging into master " + master + "..."
+    main = main_nodes[0].public_dns_name
+    print "Logging into main " + main + "..."
     proxy_opt = ""
     if opts.proxy_port != None:
       proxy_opt = "-D " + opts.proxy_port
     subprocess.check_call("ssh -o StrictHostKeyChecking=no -i %s %s root@%s" %
-        (opts.identity_file, proxy_opt, master), shell=True)
+        (opts.identity_file, proxy_opt, main), shell=True)
 
-  elif action == "get-master":
-    (master_nodes, slave_nodes, zoo_nodes) = get_existing_cluster(conn, opts, cluster_name)
-    print master_nodes[0].public_dns_name
+  elif action == "get-main":
+    (main_nodes, subordinate_nodes, zoo_nodes) = get_existing_cluster(conn, opts, cluster_name)
+    print main_nodes[0].public_dns_name
 
   elif action == "stop":
     response = raw_input("Are you sure you want to stop the cluster " +
@@ -491,14 +491,14 @@ def main():
         "AMAZON EBS IF IT IS EBS-BACKED!!\n" +
         "Stop cluster " + cluster_name + " (y/N): ")
     if response == "y":
-      (master_nodes, slave_nodes, zoo_nodes) = get_existing_cluster(
+      (main_nodes, subordinate_nodes, zoo_nodes) = get_existing_cluster(
           conn, opts, cluster_name)
-      print "Stopping master..."
-      for inst in master_nodes:
+      print "Stopping main..."
+      for inst in main_nodes:
         if inst.state not in ["shutting-down", "terminated"]:
           inst.stop()
-      print "Stopping slaves..."
-      for inst in slave_nodes:
+      print "Stopping subordinates..."
+      for inst in subordinate_nodes:
         if inst.state not in ["shutting-down", "terminated"]:
           inst.stop()
       if zoo_nodes != []:
@@ -508,14 +508,14 @@ def main():
             inst.stop()
 
   elif action == "start":
-    (master_nodes, slave_nodes, zoo_nodes) = get_existing_cluster(
+    (main_nodes, subordinate_nodes, zoo_nodes) = get_existing_cluster(
         conn, opts, cluster_name)
-    print "Starting slaves..."
-    for inst in slave_nodes:
+    print "Starting subordinates..."
+    for inst in subordinate_nodes:
       if inst.state not in ["shutting-down", "terminated"]:
         inst.start()
-    print "Starting master..."
-    for inst in master_nodes:
+    print "Starting main..."
+    for inst in main_nodes:
       if inst.state not in ["shutting-down", "terminated"]:
         inst.start()
     if zoo_nodes != []:
@@ -523,8 +523,8 @@ def main():
       for inst in zoo_nodes:
         if inst.state not in ["shutting-down", "terminated"]:
           inst.start()
-    wait_for_cluster(conn, opts.wait, master_nodes, slave_nodes, zoo_nodes)
-    setup_cluster(conn, master_nodes, slave_nodes, zoo_nodes, opts, False)
+    wait_for_cluster(conn, opts.wait, main_nodes, subordinate_nodes, zoo_nodes)
+    setup_cluster(conn, main_nodes, subordinate_nodes, zoo_nodes, opts, False)
 
   elif action == "shutdown":
     print >> stderr, ("The shutdown action is no longer available.\n" +

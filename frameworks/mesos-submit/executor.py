@@ -56,15 +56,15 @@ class SecondaryScheduler(mesos.Scheduler):
     driver.replyToOffer(oid, [], {"timeout": "-1"})
 
   def registered(self, driver, fid):
-    # Registered is called both the first time whe connect to a master
-    # and subsequent times if we reconnect or the master fails over.
+    # Registered is called both the first time whe connect to a main
+    # and subsequent times if we reconnect or the main fails over.
     # We only want to launch the command the first time.
     if not self.command_started:
       print "Registered with Mesos; starting command"
       Thread(target=run_command, args=[self.command, driver]).start()
       self.command_started = True
     else:
-      print "Re-registered with Mesos (likely due to master failover)"
+      print "Re-registered with Mesos (likely due to main failover)"
 
   def error(self, driver, code, message):
     print "Error from Mesos: %s (code %s)" % (message, code)
@@ -73,15 +73,15 @@ class SecondaryScheduler(mesos.Scheduler):
 # This function is called in a separate thread to run our secondary scheduler;
 # for some reason, things fail if we launch it from the executor's launchTask
 # callback (this is likely to be SWIG/Python related).
-def run_scheduler(fid, framework_name, master, command):
+def run_scheduler(fid, framework_name, main, command):
   print "Starting secondary scheduler"
   sched = SecondaryScheduler(framework_name, command)
-  sched_driver = mesos.MesosSchedulerDriver(sched, master, fid)
+  sched_driver = mesos.MesosSchedulerDriver(sched, main, fid)
   sched_driver.run()
 
 
 # Executor class for mesos-submit. Expects to be given a single task
-# to launch with a framework ID, master URL and command as parameters.
+# to launch with a framework ID, main URL and command as parameters.
 # Once this task is received, the executor registers as a scheduler for the
 # framework by creating a SecondaryScheduler object, allowing the mesos-submit
 # command on the user's machine to exit, and it starts the user's command
@@ -94,18 +94,18 @@ class MyExecutor(mesos.Executor):
   def launchTask(self, driver, task):
     if self.sched == None:
       print "Received task; going to register as scheduler"
-      # Recover framework ID, master and command from task arg
-      fid, framework_name, master, command = pickle.loads(task.arg)
+      # Recover framework ID, main and command from task arg
+      fid, framework_name, main, command = pickle.loads(task.arg)
       print "Mesos-submit parameters:"
       print "  framework ID = %s" % fid
       print "  framework name = %s" % framework_name
-      print "  master = %s" % master
+      print "  main = %s" % main
       print "  command = %s" % command
       # Start our secondary scheduler in a different thread (for some reason,
       # this fails if we do it from the same thread.. probably due to some
       # SWIG Python interaction).
       Thread(target=run_scheduler, 
-             args=[fid, framework_name, master, command]).start()
+             args=[fid, framework_name, main, command]).start()
     else:
       print "Error: received a second task -- this should never happen!"
 

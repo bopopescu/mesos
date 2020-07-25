@@ -49,7 +49,7 @@ class MyScheduler(mesos.Scheduler):
 
         task = mesos_pb2.TaskDescription()
         task.task_id.value = str(tid)
-        task.slave_id.value = offer.slave_id.value
+        task.subordinate_id.value = offer.subordinate_id.value
         task.name = "task %d" % tid
 
         cpus = task.resources.add()

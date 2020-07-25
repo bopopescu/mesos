@@ -26,7 +26,7 @@ class Scheduler:
   def offerRescinded(self, driver, offerId): pass
   def statusUpdate(self, driver, status): pass
   def frameworkMessage(self, driver, message): pass
-  def slaveLost(self, driver, slaveId): pass
+  def subordinateLost(self, driver, subordinateId): pass
 
   # Default implementation of error() prints to stderr because we can't
   # make error() an abstract method in Python
@@ -46,7 +46,7 @@ class SchedulerDriver:
   def launchTasks(self, offerId, tasks, filters = None): pass
   def killTask(self, taskId): pass
   def reviveOffers(self): pass
-  def sendFrameworkMessage(self, slaveId, executorId, data): pass
+  def sendFrameworkMessage(self, subordinateId, executorId, data): pass
 
 
 # Base class for Mesos executors. Users' executors should extend this class
